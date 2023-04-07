@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from config import cfg
 import os
-os.environ["PYOPENGL_PLATFORM"] = "egl"
+# os.environ["PYOPENGL_PLATFORM"] = "egl"
 import pyrender
 import trimesh
 
@@ -102,7 +102,7 @@ def vis_3d_skeleton(kpt_3d, kpt_3d_vis, kps_lines, filename=None):
     x_r = np.array([0, cfg.input_shape[1]], dtype=np.float32)
     y_r = np.array([0, cfg.input_shape[0]], dtype=np.float32)
     z_r = np.array([0, 1], dtype=np.float32)
-    
+
     if filename is None:
         ax.set_title('3D vis')
     else:
@@ -126,14 +126,14 @@ def render_mesh(img, mesh, face, cam_param):
     mesh = pyrender.Mesh.from_trimesh(mesh, material=material, smooth=False)
     scene = pyrender.Scene(ambient_light=(0.3, 0.3, 0.3))
     scene.add(mesh, 'mesh')
-    
+
     focal, princpt = cam_param['focal'], cam_param['princpt']
     camera = pyrender.IntrinsicsCamera(fx=focal[0], fy=focal[1], cx=princpt[0], cy=princpt[1])
     scene.add(camera)
- 
+
     # renderer
     renderer = pyrender.OffscreenRenderer(viewport_width=img.shape[1], viewport_height=img.shape[0], point_size=1.0)
-   
+
     # light
     light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=0.8)
     light_pose = np.eye(4)

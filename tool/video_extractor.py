@@ -43,7 +43,37 @@ def get_common_videos(videos, jsons):
     return common_video_files, common_json_files
 
 
-def process_video(video, detection, model, output_folder, save_video=False):
+def x1y1x2y2_to_xywh(bbox):
+    bbox = [int(xx) for xx in bbox]
+    x1, y1, x2, y2 = bbox
+    return [x1, y1, x2 - x1, y2 - y1]
+
+
+def square_bbox(bbox):
+    bbox = [int(xx) for xx in bbox]
+    x1, y1, w, h = bbox
+    if w > h:
+        y1 = max(0, y1 - int((w - h) / 2))
+        h = w
+    elif h > w:
+        x1 = max(0, x1 - int((h - w) / 2))
+        w = h
+    return [x1, y1, w, h]
+
+
+def pad_bbox(bbox, width, height, padding=0.5):
+    bbox = [int(xx) for xx in bbox]
+    x1, y1, w, h = bbox
+    x2 = x1 + w
+    y2 = y1 + h
+    x1 = max(0, x1 - int(w * padding))
+    y1 = max(0, y1 - int(h * padding))
+    x2 = min(width, x2 + int(w * padding))
+    y2 = min(height, y2 + int(h * padding))
+    return [x1, y1, x2 - x1, y2 - y1]
+
+
+def process_video(video, detection, model, output_folder, save_video=False, padding=0.2):
 
     result = {}
 
@@ -60,12 +90,13 @@ def process_video(video, detection, model, output_folder, save_video=False):
 
     if save_video:
         video_folder = os.path.join(output_folder, 'video')
-        if not os.path.exists(video_folder):
-            os.makedirs(video_folder, exist_ok=True)
         output_file_path = os.path.join(
             video_folder,
             '/'.join(video.split('/')[-5:])
         )
+        if not os.path.exists('/'.join(output_file_path.split('/')[:-1])):
+            os.makedirs('/'.join(output_file_path.split('/')[:-1]), exist_ok=True)
+
         video_writer_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video_writer = cv2.VideoWriter(
             output_file_path,
@@ -74,29 +105,34 @@ def process_video(video, detection, model, output_folder, save_video=False):
             (int(width), int(height))
         )
 
-    pbar = tqdm(range(int(300)),
-                desc=f'Processing {video.split("/")[-1]}')
-    # pbar = tqdm(range(int(num_frames)),
+    # pbar = tqdm(range(int(300)),
     #             desc=f'Processing {video.split("/")[-1]}')
+    pbar = tqdm(range(int(num_frames)),
+                desc=f'Processing {video.split("/")[-1]}')
     for ii in pbar:
         try:
 
+            success, image = cap.read()
+
             if detections[str(ii)] == []:
                 result.update({ii: []})
+                video_writer.write(image)
                 continue
-
-            success, image = cap.read()
 
             if not success:
                 result.update({ii: []})
                 print('Error reading frame {} from video {}'.format(ii, video))
                 continue
 
-            bboxes = [box for box in detections[str(ii)] if box[-1] == 1.0]
+            outputs = []
+            bboxes = [process_bbox(x1y1x2y2_to_xywh(box[:4]), width, height)
+                      for box in detections[str(ii)] if box[-1] == 1.0]
+            # bboxes = [square_bbox(x1y1x2y2_to_xywh(box[:4])) for
+            #           box in detections[str(ii)] if box[-1] == 1.0]
+            # bboxes = [pad_bbox(box, width, height, padding) for box in bboxes]
             for bbox in bboxes:
 
-                bbox = [int(xx) for xx in bbox[:4]]
-                bbox = process_bbox(bbox, width, height)
+                # bbox = process_bbox(bbox, width, height)
                 img, img2bb_trans, bb2img_trans = generate_patch_image(
                     image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
                 img = transform(img.astype(np.float32)) / 255.
@@ -106,22 +142,30 @@ def process_video(video, detection, model, output_folder, save_video=False):
                 targets = {}
                 meta_info = {}
                 with torch.no_grad():
-                    outputs = model(inputs, targets, meta_info, 'test')
+                    outputs.append(model(inputs, targets, meta_info, 'test'))
 
-                if save_video:
-                    mesh = outputs['smpl_mesh_cam'].detach().cpu().numpy()[0]
+            if save_video:
+                rendered_img = image.copy()
+                for output, bbox in zip(outputs, bboxes):
+                    mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
 
                     focal = [cfg.focal[0] / cfg.input_img_shape[1] * bbox[2],
-                            cfg.focal[1] / cfg.input_img_shape[0] * bbox[3]]
+                             cfg.focal[1] / cfg.input_img_shape[0] * bbox[3]]
                     principal_pt = [
                         cfg.princpt[0] / cfg.input_img_shape[1] * bbox[2] + bbox[0],
                         cfg.princpt[1] / cfg.input_img_shape[0] * bbox[3] + bbox[1]]
+                    rendered_img = cv2.rectangle(
+                        rendered_img,
+                        (int(bbox[0]), int(bbox[1])),
+                        (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])),
+                        (0, 255, 0), 2)
+
                     rendered_img = render_mesh(
-                        image.copy(),
+                        rendered_img,
                         mesh,
                         smpl.face,
                         {'focal': focal, 'princpt': principal_pt}).astype(np.uint8)
-                    video_writer.write(rendered_img)
+                video_writer.write(rendered_img)
 
         except Exception as e:
             print(traceback.format_exc())

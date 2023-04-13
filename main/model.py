@@ -11,14 +11,15 @@ import math
 import copy
 
 class Model(nn.Module):
-    def __init__(self, networks):
+    def __init__(self, networks, device):
         super(Model, self).__init__()
         # body networks
+        self.device = device
         if cfg.parts == 'body':
             self.backbone = networks['backbone']
             self.position_net = networks['position_net']
             self.rotation_net = networks['rotation_net']
-            self.smpl_layer = copy.deepcopy(smpl.layer['neutral']).cuda()
+            self.smpl_layer = copy.deepcopy(smpl.layer['neutral']).to(self.device)
             self.trainable_modules = [self.backbone, self.position_net, self.rotation_net]
 
         # hand networks
@@ -26,24 +27,24 @@ class Model(nn.Module):
             self.backbone = networks['backbone']
             self.position_net = networks['position_net']
             self.rotation_net = networks['rotation_net']
-            self.mano_layer = copy.deepcopy(mano.layer['right']).cuda()
+            self.mano_layer = copy.deepcopy(mano.layer['right']).to(self.device)
             self.trainable_modules = [self.backbone, self.position_net, self.rotation_net]
 
         # face networks
         elif cfg.parts == 'face':
             self.backbone = networks['backbone']
             self.regressor = networks['regressor']
-            self.flame_layer = copy.deepcopy(flame.layer).cuda()
+            self.flame_layer = copy.deepcopy(flame.layer).to(self.device)
             self.trainable_modules = [self.backbone, self.regressor]
 
         self.coord_loss = CoordLoss()
         self.param_loss = ParamLoss()
-        
+
     def get_camera_trans(self, cam_param):
         # camera translation
         t_xy = cam_param[:,:2]
         gamma = torch.sigmoid(cam_param[:,2]) # apply sigmoid to make it positive
-        k_value = torch.FloatTensor([math.sqrt(cfg.focal[0]*cfg.focal[1]*cfg.camera_3d_size*cfg.camera_3d_size/(cfg.input_img_shape[0]*cfg.input_img_shape[1]))]).cuda().view(-1)
+        k_value = torch.FloatTensor([math.sqrt(cfg.focal[0]*cfg.focal[1]*cfg.camera_3d_size*cfg.camera_3d_size/(cfg.input_img_shape[0]*cfg.input_img_shape[1]))]).to(self.device).view(-1)
         t_z = k_value * gamma
         cam_trans = torch.cat((t_xy, t_z[:,None]),1)
         return cam_trans
@@ -52,7 +53,7 @@ class Model(nn.Module):
         img_feat = backbone(inputs['img'])
         joint_img = position_net(img_feat)
         return img_feat, joint_img
-    
+
     def forward_rotation_net(self, img_feat, joint_img, rotation_net):
         batch_size = img_feat.shape[0]
 
@@ -62,7 +63,7 @@ class Model(nn.Module):
             # change 6d pose -> axis angles
             root_pose = rot6d_to_axis_angle(root_pose_6d)
             pose_param = rot6d_to_axis_angle(pose_param_6d.view(-1,6)).reshape(batch_size,-1)
-            pose_param = torch.cat((pose_param, torch.zeros((batch_size,2*3)).cuda().float()),1) # add two zero hand poses
+            pose_param = torch.cat((pose_param, torch.zeros((batch_size,2*3)).to(self.device).float()),1) # add two zero hand poses
             cam_trans = self.get_camera_trans(cam_param)
             return root_pose, pose_param, shape_param, cam_trans
 
@@ -81,22 +82,22 @@ class Model(nn.Module):
             output = self.smpl_layer(global_orient=params['root_pose'], body_pose=params['body_pose'], betas=params['shape'])
             # camera-centered 3D coordinate
             mesh_cam = output.vertices
-            joint_cam = torch.bmm(torch.from_numpy(smpl.joint_regressor).cuda()[None,:,:].repeat(batch_size,1,1), mesh_cam)
+            joint_cam = torch.bmm(torch.from_numpy(smpl.joint_regressor).to(self.device)[None,:,:].repeat(batch_size,1,1), mesh_cam)
             root_joint_idx = smpl.root_joint_idx
         elif cfg.parts == 'hand':
             output = self.mano_layer(global_orient=params['root_pose'], hand_pose=params['hand_pose'], betas=params['shape'])
             # camera-centered 3D coordinate
             mesh_cam = output.vertices
-            joint_cam = torch.bmm(torch.from_numpy(mano.joint_regressor).cuda()[None,:,:].repeat(batch_size,1,1), mesh_cam)
+            joint_cam = torch.bmm(torch.from_numpy(mano.joint_regressor).to(self.device)[None,:,:].repeat(batch_size,1,1), mesh_cam)
             root_joint_idx = mano.root_joint_idx
         elif cfg.parts == 'face':
-            zero_pose = torch.zeros((1,3)).float().cuda().repeat(batch_size,1) # zero pose for eyes and neck
+            zero_pose = torch.zeros((1,3)).float().to(self.device).repeat(batch_size,1) # zero pose for eyes and neck
             output = self.flame_layer(global_orient=params['root_pose'], jaw_pose=params['jaw_pose'], betas=params['shape'], expression=params['expr'], neck_pose=zero_pose, leye_pose=zero_pose, reye_pose=zero_pose)
             # camera-centered 3D coordinate
             mesh_cam = output.vertices
             joint_cam = output.joints
             root_joint_idx = flame.root_joint_idx
-        
+
         if mode == 'test' and cfg.testset == 'AGORA': # use 45 joints for AGORA evaluation
             joint_cam = output.joints
 
@@ -146,7 +147,7 @@ class Model(nn.Module):
             flame_jaw_pose = rot6d_to_axis_angle(flame_jaw_pose)
             cam_trans = self.get_camera_trans(cam_param)
             joint_proj, joint_cam, mesh_cam = self.get_coord({'root_pose': flame_root_pose, 'jaw_pose': flame_jaw_pose, 'shape': flame_shape, 'expr': flame_expr, 'cam_trans': cam_trans}, mode)
-        
+
         if mode == 'train':
             # loss functions
             loss = {}
@@ -158,7 +159,7 @@ class Model(nn.Module):
                 loss['joint_proj'] = self.coord_loss(joint_proj, targets['joint_img'][:,:,:2], meta_info['joint_trunc'])
                 loss['joint_cam'] = self.coord_loss(joint_cam, targets['joint_cam'], meta_info['joint_valid'] * meta_info['is_3D'][:,None,None])
                 loss['smpl_joint_cam'] = self.coord_loss(joint_cam, targets['smpl_joint_cam'], meta_info['smpl_joint_valid'])
-                
+
             elif cfg.parts == 'hand':
                 loss['joint_img'] = self.coord_loss(joint_img, targets['joint_img'], meta_info['joint_trunc'], meta_info['is_3D'])
                 loss['mano_joint_img'] = self.coord_loss(joint_img, targets['mano_joint_img'], meta_info['mano_joint_trunc'])
@@ -180,7 +181,7 @@ class Model(nn.Module):
             return loss
         else:
             # test output
-            out = {'cam_trans': cam_trans} 
+            out = {'cam_trans': cam_trans}
             if cfg.parts == 'body':
                 out['img'] = inputs['img']
                 out['joint_img'] = joint_img
@@ -194,7 +195,7 @@ class Model(nn.Module):
                     out['bb2img_trans'] = meta_info['bb2img_trans']
             elif cfg.parts == 'hand':
                 out['img'] = inputs['img']
-                out['joint_img'] = joint_img 
+                out['joint_img'] = joint_img
                 out['mano_mesh_cam'] = mesh_cam
                 out['mano_pose'] = mano_pose
                 out['mano_shape'] = mano_shape
@@ -229,7 +230,7 @@ def init_weights(m):
         nn.init.normal_(m.weight,std=0.01)
         nn.init.constant_(m.bias,0)
 
-def get_model(mode):
+def get_model(mode, device):
     if cfg.parts == 'body':
         backbone = ResNetBackbone(cfg.resnet_type)
         position_net = PositionNet()
@@ -238,7 +239,8 @@ def get_model(mode):
             backbone.init_weights()
             position_net.apply(init_weights)
             rotation_net.apply(init_weights)
-        model = Model({'backbone': backbone, 'position_net': position_net, 'rotation_net': rotation_net})
+        model = Model({'backbone': backbone, 'position_net': position_net, 'rotation_net': rotation_net},
+                      device)
         return model
 
     if cfg.parts == 'hand':
@@ -249,7 +251,8 @@ def get_model(mode):
             backbone.init_weights()
             position_net.apply(init_weights)
             rotation_net.apply(init_weights)
-        model = Model({'backbone': backbone, 'position_net': position_net, 'rotation_net': rotation_net})
+        model = Model({'backbone': backbone, 'position_net': position_net, 'rotation_net': rotation_net},
+                      device)
         return model
 
     if cfg.parts == 'face':
@@ -258,6 +261,7 @@ def get_model(mode):
         if mode == 'train':
             backbone.init_weights()
             regressor.apply(init_weights)
-        model = Model({'backbone': backbone, 'regressor': regressor})
+        model = Model({'backbone': backbone, 'regressor': regressor},
+                      device)
         return model
 

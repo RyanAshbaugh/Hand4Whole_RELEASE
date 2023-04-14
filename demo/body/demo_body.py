@@ -34,7 +34,7 @@ def parse_args():
         gpus[0] = int(gpus[0])
         gpus[1] = int(gpus[1]) + 1
         args.gpu_ids = ','.join(map(lambda x: str(x), list(range(*gpus))))
-    
+
     return args
 
 args = parse_args()
@@ -45,7 +45,7 @@ cudnn.benchmark = True
 model_path = './snapshot_6_body.pth.tar'
 assert osp.exists(model_path), 'Cannot find model at ' + model_path
 print('Load checkpoint from {}'.format(model_path))
-model = get_model('test')
+model = get_model('test', torch.device('cuda:0'))
 model = DataParallel(model).cuda()
 ckpt = torch.load(model_path)
 model.load_state_dict(ckpt['network'], strict=False)
@@ -60,10 +60,10 @@ original_img_height, original_img_width = original_img.shape[:2]
 # prepare bbox
 bbox = [193, 120, 516-193, 395-120] # xmin, ymin, width, height
 bbox = process_bbox(bbox, original_img_width, original_img_height)
-img, img2bb_trans, bb2img_trans = generate_patch_image(original_img, bbox, 1.0, 0.0, False, cfg.input_img_shape) 
+img, img2bb_trans, bb2img_trans = generate_patch_image(original_img, bbox, 1.0, 0.0, False, cfg.input_img_shape)
 img = transform(img.astype(np.float32))/255
 img = img.cuda()[None,:,:,:]
-    
+
 # forward
 inputs = {'img': img}
 targets = {}
@@ -87,7 +87,7 @@ rendered_img = render_mesh(vis_img, mesh, smpl.face, {'focal': focal, 'princpt':
 cv2.imwrite('render_original_img_body.jpg', rendered_img)
 
 # save SMPL parameters
-smpl_pose = out['smpl_pose'].detach().cpu().numpy()[0]; smpl_shape = out['smpl_shape'].detach().cpu().numpy()[0]; 
+smpl_pose = out['smpl_pose'].detach().cpu().numpy()[0]; smpl_shape = out['smpl_shape'].detach().cpu().numpy()[0];
 with open('smpl_param.json', 'w') as f:
     json.dump({'pose': smpl_pose.reshape(-1).tolist(), 'shape': smpl_shape.reshape(-1).tolist()}, f)
 

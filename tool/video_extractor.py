@@ -13,7 +13,6 @@ from pathlib import Path
 
 import torch
 import torchvision.transforms as transforms
-# from torch.nn.parallel.data_parallel import DataParallel
 
 sys.path.insert(0, 'main')
 sys.path.insert(0, 'data')
@@ -87,10 +86,6 @@ def process_image_batch(images, bboxes, model, cfg, device):
     rois = torch.zeros((len(images), 3, *cfg.input_img_shape),
                        dtype=torch.float32).to(device)
     for ii, (image, bbox) in enumerate(zip(images, bboxes)):
-        # roi = image[int(bbox[1]):int(bbox[1] + bbox[3]),
-        #             int(bbox[0]):int(bbox[0] + bbox[2]), :]
-        # roi = cv2.resize(roi, (cfg.input_img_shape[1], cfg.input_img_shape[0]),
-        #                  interpolation=cv2.INTER_LINEAR).astype(np.float32)
         roi, img2bb_trans, bb2img_trans = generate_patch_image(
             image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
 
@@ -243,12 +238,6 @@ def process_video(video, detection, model, output_folder, device, batch_size=1, 
             (int(width), int(height))
         )
 
-    # pbar = tqdm(range(int(300)),
-    #             desc=f'Processing {video.split("/")[-1]}')
-    # pbar = tqdm(range(int(num_frames)),
-    #             desc=f'Processing {video.split("/")[-1]}')
-
-
     count = 0
     for frame_batch, bbox_batch, frame_ids in \
             tqdm(video_frame_generator(video, detection, batch_size=batch_size),
@@ -280,37 +269,6 @@ def process_video(video, detection, model, output_folder, device, batch_size=1, 
             print(traceback.format_exc())
             print('Error processing frame {} from video {}'.format(ii, video))
             continue
-    # for ii in pbar:
-    #     try:
-
-    #         success, image = cap.read()
-    #         if not success:
-    #             result.update({ii: []})
-    #             print('Error reading frame {} from video {}'.format(ii, video))
-    #             continue
-
-    #         if detections[str(ii)] != []:
-    #             outputs = []
-    #             bboxes = [process_bbox(x1y1x2y2_to_xywh(box[:4]), width, height)
-    #                     for box in detections[str(ii)] if box[-1] == 1.0]
-    #             for bbox in bboxes:
-    #                 outputs.append(process_image(image, bbox, model, cfg, device))
-
-    #         if detections[str(ii)] == []:
-    #             result.update({ii: []})
-
-    #         if save_video:
-    #             rendered_img = image
-
-    #             for output, bbox in zip(outputs, bboxes):
-    #                 rendered_img = visualize_mesh(output, bbox, rendered_img, cfg)
-
-    #             video_writer.write(rendered_img)
-
-    #     except Exception as e:
-    #         print(traceback.format_exc())
-    #         print('Error processing frame {} from video {}'.format(ii, video))
-    #         continue
 
     cap.release()
 
@@ -336,7 +294,6 @@ def run_pose_inference():
 
     cfg.set_args(args.gpu, 'body')
     model = get_model('test', device)
-    # model = DataParallel(model).to(device)
     model = model.to(device)
     state_dict = torch.load(args.model, map_location=torch.device('cpu'))['network']
     state_dict = remove_data_parallel(state_dict)

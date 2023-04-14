@@ -3,6 +3,7 @@ import os
 import sys
 import cv2
 import json
+import copy
 import argparse
 import traceback
 import numpy as np
@@ -22,8 +23,17 @@ from model import get_model
 from utils.preprocessing import process_bbox, generate_patch_image
 from utils.human_models import smpl, smpl_x, mano, flame
 from utils.vis import render_mesh, save_obj
+from collections import OrderedDict
 
 transform = transforms.ToTensor()
+
+
+def remove_data_parallel(state_dict):
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k.replace('module.', '')  # remove 'module.'
+        new_state_dict[name] = v
+    return new_state_dict
 
 
 def get_common_videos(videos, jsons):
@@ -74,11 +84,23 @@ def pad_bbox(bbox, width, height, padding=0.5):
 
 def process_image_batch(images, bboxes, model, cfg, device):
 
-    outputs = []
-    for image, bbox in zip(images, bboxes):
-        outputs.append(process_image(image, bbox, model, cfg, device))
+    rois = torch.zeros((len(images), 3, *cfg.input_img_shape),
+                       dtype=torch.float32).to(device)
+    for ii, (image, bbox) in enumerate(zip(images, bboxes)):
+        # roi = image[int(bbox[1]):int(bbox[1] + bbox[3]),
+        #             int(bbox[0]):int(bbox[0] + bbox[2]), :]
+        # roi = cv2.resize(roi, (cfg.input_img_shape[1], cfg.input_img_shape[0]),
+        #                  interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        roi, img2bb_trans, bb2img_trans = generate_patch_image(
+            image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
 
-    return outputs
+        rois[ii, :, :, :] = transform(roi) / 255.
+
+    inputs = {'img': rois}
+    targets = {}
+    meta_info = {}
+    with torch.no_grad():
+        return model(inputs, targets, meta_info, 'test')
 
 
 def process_image(image, bbox, model, cfg, device):
@@ -234,16 +256,21 @@ def process_video(video, detection, model, output_folder, device, batch_size=1, 
         try:
             outputs = process_image_batch(frame_batch, bbox_batch, model, cfg, device)
 
-            for ii, output in enumerate(outputs):
-                # if bbox_batch[ii] is not None:
-                #     result.update({frame_ids[ii]: output})
-                # else:
-                #     result.update({frame_ids[ii]: []})
+            rendered_batch = {}
+            for ii in range(len(frame_batch)):
+                frame_id = frame_ids[ii]
+                if frame_id not in rendered_batch:
+                    rendered_batch[frame_id] = copy.deepcopy(frame_batch[ii])
 
                 if save_video:
-                    rendered_img = visualize_mesh(
-                        output, bbox_batch[ii], frame_batch[ii], cfg)
-                    video_writer.write(rendered_img)
+                    rendered_batch[frame_id] = visualize_mesh(
+                        {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
+                        bbox_batch[ii],
+                        rendered_batch[frame_id],
+                        cfg
+                    )
+            for frame_id in list(set(frame_ids)):
+                video_writer.write(rendered_batch[frame_id])
 
             count += batch_size
             if count >= 200:
@@ -299,7 +326,7 @@ def run_pose_inference():
     parser.add_argument('--output_folder', default=None, required=True, type=str)
     parser.add_argument('--save_video', action='store_true', default=False)
     parser.add_argument('--gpu', type=str, default='0')
-    parser.add_argument('--batch', type=int, default=64)
+    parser.add_argument('--batch', type=int, default=1)
     args = parser.parse_args()
 
     if not os.path.exists(args.output_folder):
@@ -311,7 +338,9 @@ def run_pose_inference():
     model = get_model('test', device)
     # model = DataParallel(model).to(device)
     model = model.to(device)
-    model.load_state_dict(torch.load(args.model)['network'], strict=False)
+    state_dict = torch.load(args.model, map_location=torch.device('cpu'))['network']
+    state_dict = remove_data_parallel(state_dict)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
 
     videos = []

@@ -86,16 +86,18 @@ def process_image_batch(images, bboxes, model, cfg, device):
     rois = torch.zeros((len(images), 3, *cfg.input_img_shape),
                        dtype=torch.float32).to(device)
     for ii, (image, bbox) in enumerate(zip(images, bboxes)):
-        roi, img2bb_trans, bb2img_trans = generate_patch_image(
-            image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
+        pdb.set_trace()
+        if bbox is None:
+            roi, img2bb_trans, bb2img_trans = generate_patch_image(
+                image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
 
-        rois[ii, :, :, :] = transform(roi) / 255.
+            rois[ii, :, :, :] = transform(roi) / 255.
 
     inputs = {'img': rois}
     targets = {}
     meta_info = {}
     with torch.no_grad():
-        return model(inputs, targets, meta_info, 'test')
+        return model(inputs, targets, meta_info, 'test'), bboxes
 
 
 def process_image(image, bbox, model, cfg, device):
@@ -206,7 +208,8 @@ def video_frame_generator(video, detection, batch_size=1):
     cap.release()
 
 
-def process_video(video, detection, model, output_folder, device, batch_size=1, save_video=False):
+def process_video(video, detection, model, output_file_path, device,
+                  batch_size=1, save_video=False):
 
     result = {}
 
@@ -222,11 +225,11 @@ def process_video(video, detection, model, output_folder, device, batch_size=1, 
         'Number of frames in video and detection file do not match'
 
     if save_video:
-        video_folder = os.path.join(output_folder, 'video')
-        output_file_path = os.path.join(
-            video_folder,
-            '/'.join(video.split('/')[-5:])
-        )
+        # video_folder = os.path.join(output_folder, 'video')
+        # output_file_path = os.path.join(
+        #     video_folder,
+        #     '/'.join(video.split('/')[-5:])
+        # )
         if not os.path.exists('/'.join(output_file_path.split('/')[:-1])):
             os.makedirs('/'.join(output_file_path.split('/')[:-1]), exist_ok=True)
 
@@ -262,12 +265,13 @@ def process_video(video, detection, model, output_folder, device, batch_size=1, 
                 video_writer.write(rendered_batch[frame_id])
 
             count += batch_size
-            if count >= 200:
+            if count >= 10000:
                 break
 
         except Exception as e:
             print(traceback.format_exc())
-            print('Error processing frame {} from video {}'.format(ii, video))
+            print('Error processing a frame from video {}'.format(video))
+            pdb.set_trace()
             continue
 
     cap.release()
@@ -284,7 +288,7 @@ def run_pose_inference():
     parser.add_argument('--output_folder', default=None, required=True, type=str)
     parser.add_argument('--save_video', action='store_true', default=False)
     parser.add_argument('--gpu', type=str, default='0')
-    parser.add_argument('--batch', type=int, default=1)
+    parser.add_argument('--batch', type=int, default=64)
     args = parser.parse_args()
 
     if not os.path.exists(args.output_folder):
@@ -322,10 +326,22 @@ def run_pose_inference():
             detection.split('/')[-1].split('.')[0], \
             "Video and detection file names should be same"
 
+        video_folder = os.path.join(args.output_folder, 'video')
+        output_file_path = os.path.join(
+            video_folder,
+            '/'.join(video.split('/')[-5:])
+        )
+        if not os.path.exists('/'.join(output_file_path.split('/')[:-1])):
+            os.makedirs('/'.join(output_file_path.split('/')[:-1]), exist_ok=True)
+
         try:
-            process_video(video, detection, model, args.output_folder, device,
-                          args.batch, args.save_video)
-            pass
+            if not os.path.exists(output_file_path):
+                os.system(f"touch {output_file_path}")
+                process_video(video, detection, model, output_file_path, device,
+                              args.batch, args.save_video)
+            else:
+                print(f"\nSkipping {output_file_path}")
+
         except Exception as e:
             print("Error processing video {}: {}".format(video, e))
 

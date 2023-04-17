@@ -86,11 +86,11 @@ def process_image_batch(images, bboxes, model, cfg, device):
     rois = torch.zeros((len(images), 3, *cfg.input_img_shape),
                        dtype=torch.float32).to(device)
     for ii, (image, bbox) in enumerate(zip(images, bboxes)):
-        # if bbox is not None:
-        roi, img2bb_trans, bb2img_trans = generate_patch_image(
-            image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
+        if bbox is not None:
+            roi, img2bb_trans, bb2img_trans = generate_patch_image(
+                image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
 
-        rois[ii, :, :, :] = transform(roi) / 255.
+            rois[ii, :, :, :] = transform(roi) / 255.
 
     inputs = {'img': rois}
     targets = {}
@@ -116,9 +116,9 @@ def process_image(image, bbox, model, cfg, device):
 
 
 def visualize_mesh(output, bbox, image, cfg):
-    image = image.copy()
 
     if bbox is not None and 'smpl_mesh_cam' in output:
+
         mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
 
         focal = [cfg.focal[0] / cfg.input_img_shape[1] * bbox[2],
@@ -240,21 +240,41 @@ def process_video(video, detection, model, output_file_path, device,
         )
 
     count = 0
+    parameters = {}
     for frame_batch, bbox_batch, frame_ids in \
             tqdm(video_frame_generator(video, detection, batch_size=batch_size),
-                 desc=f'Processing {video.split("/")[-1]}',
-                 total=np.ceil(num_frames / batch_size)):
+                 desc=f'Processing {video.split("/")[-1]}'):
         try:
             outputs = process_image_batch(frame_batch, bbox_batch, model, cfg, device)
 
-            pdb.set_trace()
             rendered_batch = {}
             for ii in range(len(frame_batch)):
                 frame_id = frame_ids[ii]
                 if frame_id not in rendered_batch:
                     rendered_batch[frame_id] = copy.deepcopy(frame_batch[ii])
 
-                if save_video:
+                if frame_id not in parameters:
+                    parameters[frame_id] = []
+                frame_parameters = {}
+
+                if bbox_batch[ii] is not None:
+                    cam_trans = outputs['cam_trans'][ii, ...].cpu().tolist()
+                    smpl_pose = outputs['smpl_pose'][ii, ...].cpu().tolist()
+                    smpl_shape = outputs['smpl_shape'][ii, ...].cpu().tolist()
+                    bbox = bbox_batch[ii].tolist()
+                else:
+                    cam_trans, smpl_pose, smpl_shape, bbox = None, None, None, None
+                frame_parameters['cam_trans'] = cam_trans
+                frame_parameters['smpl_pose'] = smpl_pose
+                frame_parameters['smpl_shape'] = smpl_shape
+                frame_parameters['bbox'] = bbox
+                # frame_parameters['cam_trans'] = outputs['cam_trans'][ii, ...].cpu().tolist() if bbox_batch[ii] is not None else None
+                # frame_parameters['smpl_pose'] = outputs['smpl_pose'][ii, ...].cpu().tolist() if bbox_batch[ii] is not None else None
+                # frame_parameters['smpl_shape'] = outputs['smpl_shape'][ii, ...].cpu().tolist() if bbox_batch[ii] is not None else None
+                # frame_parameters['bbox'] = bbox_batch[ii].tolist() if bbox_batch[ii] is not None else None
+                parameters[frame_id].append(frame_parameters)
+
+                if save_video and frame_batch[ii] is not None:
                     rendered_batch[frame_id] = visualize_mesh(
                         {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
                         bbox_batch[ii],
@@ -262,18 +282,23 @@ def process_video(video, detection, model, output_file_path, device,
                         cfg
                     )
 
-            for frame_id in list(set(frame_ids)):
-                video_writer.write(rendered_batch[frame_id])
+            rendered_frame_ids = sorted(rendered_batch.keys())
+            for frame_id in rendered_frame_ids:
+                if save_video:
+                    video_writer.write(rendered_batch[frame_id])
 
             count += batch_size
-            if count >= 200:
-                break
+            # if count >= 200:
+            #     break
 
         except Exception as e:
             print(traceback.format_exc())
             print('Error processing a frame from video {}'.format(video))
             pdb.set_trace()
             continue
+
+    with open(output_file_path, 'w') as f:
+        json.dump(parameters, f)
 
     cap.release()
 
@@ -321,7 +346,8 @@ def run_pose_inference():
         "Number of videos and detection files should be same"
 
     for ii, (video, detection) in enumerate(tqdm(zip(common_videos, common_detections),
-                                                 desc="Processing videos")):
+                                                 desc="Processing videos",
+                                                 total=len(common_videos))):
 
         assert video.split('/')[-1].split('.')[0] == \
             detection.split('/')[-1].split('.')[0], \
@@ -345,6 +371,7 @@ def run_pose_inference():
 
         except Exception as e:
             print("Error processing video {}: {}".format(video, e))
+            pdb.set_trace()
 
 
 if __name__ == '__main__':

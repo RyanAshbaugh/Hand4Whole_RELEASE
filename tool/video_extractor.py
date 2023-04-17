@@ -86,18 +86,17 @@ def process_image_batch(images, bboxes, model, cfg, device):
     rois = torch.zeros((len(images), 3, *cfg.input_img_shape),
                        dtype=torch.float32).to(device)
     for ii, (image, bbox) in enumerate(zip(images, bboxes)):
-        pdb.set_trace()
-        if bbox is None:
-            roi, img2bb_trans, bb2img_trans = generate_patch_image(
-                image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
+        # if bbox is not None:
+        roi, img2bb_trans, bb2img_trans = generate_patch_image(
+            image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
 
-            rois[ii, :, :, :] = transform(roi) / 255.
+        rois[ii, :, :, :] = transform(roi) / 255.
 
     inputs = {'img': rois}
     targets = {}
     meta_info = {}
     with torch.no_grad():
-        return model(inputs, targets, meta_info, 'test'), bboxes
+        return model(inputs, targets, meta_info, 'test')
 
 
 def process_image(image, bbox, model, cfg, device):
@@ -119,24 +118,25 @@ def process_image(image, bbox, model, cfg, device):
 def visualize_mesh(output, bbox, image, cfg):
     image = image.copy()
 
-    mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
+    if bbox is not None and 'smpl_mesh_cam' in output:
+        mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
 
-    focal = [cfg.focal[0] / cfg.input_img_shape[1] * bbox[2],
-             cfg.focal[1] / cfg.input_img_shape[0] * bbox[3]]
-    principal_pt = [
-        cfg.princpt[0] / cfg.input_img_shape[1] * bbox[2] + bbox[0],
-        cfg.princpt[1] / cfg.input_img_shape[0] * bbox[3] + bbox[1]]
-    image = cv2.rectangle(
-        image,
-        (int(bbox[0]), int(bbox[1])),
-        (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])),
-        (0, 255, 0), 2)
+        focal = [cfg.focal[0] / cfg.input_img_shape[1] * bbox[2],
+                cfg.focal[1] / cfg.input_img_shape[0] * bbox[3]]
+        principal_pt = [
+            cfg.princpt[0] / cfg.input_img_shape[1] * bbox[2] + bbox[0],
+            cfg.princpt[1] / cfg.input_img_shape[0] * bbox[3] + bbox[1]]
+        image = cv2.rectangle(
+            image,
+            (int(bbox[0]), int(bbox[1])),
+            (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])),
+            (0, 255, 0), 2)
 
-    image = render_mesh(
-        image,
-        mesh,
-        smpl.face,
-        {'focal': focal, 'princpt': principal_pt}).astype(np.uint8)
+        image = render_mesh(
+            image,
+            mesh,
+            smpl.face,
+            {'focal': focal, 'princpt': principal_pt}).astype(np.uint8)
 
     return image
 
@@ -225,17 +225,15 @@ def process_video(video, detection, model, output_file_path, device,
         'Number of frames in video and detection file do not match'
 
     if save_video:
-        # video_folder = os.path.join(output_folder, 'video')
-        # output_file_path = os.path.join(
-        #     video_folder,
-        #     '/'.join(video.split('/')[-5:])
-        # )
-        if not os.path.exists('/'.join(output_file_path.split('/')[:-1])):
-            os.makedirs('/'.join(output_file_path.split('/')[:-1]), exist_ok=True)
+        video_file_path = output_file_path.replace(
+            "parameters", "video").replace(".json", ".mp4")
+        if not os.path.exists('/'.join(video_file_path.split('/')[:-1])):
+            os.makedirs('/'.join(video_file_path.split('/')[:-1]),
+                        exist_ok=True)
 
         video_writer_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video_writer = cv2.VideoWriter(
-            output_file_path,
+            video_file_path,
             video_writer_fourcc,
             cap_fps,
             (int(width), int(height))
@@ -244,10 +242,12 @@ def process_video(video, detection, model, output_file_path, device,
     count = 0
     for frame_batch, bbox_batch, frame_ids in \
             tqdm(video_frame_generator(video, detection, batch_size=batch_size),
-                 desc=f'Processing {video.split("/")[-1]}'):
+                 desc=f'Processing {video.split("/")[-1]}',
+                 total=np.ceil(num_frames / batch_size)):
         try:
             outputs = process_image_batch(frame_batch, bbox_batch, model, cfg, device)
 
+            pdb.set_trace()
             rendered_batch = {}
             for ii in range(len(frame_batch)):
                 frame_id = frame_ids[ii]
@@ -261,11 +261,12 @@ def process_video(video, detection, model, output_file_path, device,
                         rendered_batch[frame_id],
                         cfg
                     )
+
             for frame_id in list(set(frame_ids)):
                 video_writer.write(rendered_batch[frame_id])
 
             count += batch_size
-            if count >= 10000:
+            if count >= 200:
                 break
 
         except Exception as e:
@@ -326,10 +327,10 @@ def run_pose_inference():
             detection.split('/')[-1].split('.')[0], \
             "Video and detection file names should be same"
 
-        video_folder = os.path.join(args.output_folder, 'video')
+        parameter_folder = os.path.join(args.output_folder, 'parameters')
         output_file_path = os.path.join(
-            video_folder,
-            '/'.join(video.split('/')[-5:])
+            parameter_folder,
+            '/'.join(video.split('/')[-5:]).replace('.mp4', '.json')
         )
         if not os.path.exists('/'.join(output_file_path.split('/')[:-1])):
             os.makedirs('/'.join(output_file_path.split('/')[:-1]), exist_ok=True)

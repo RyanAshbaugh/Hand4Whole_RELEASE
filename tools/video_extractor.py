@@ -51,6 +51,12 @@ def get_common_videos(videos, jsons):
     return common_video_files, common_json_files
 
 
+def keyword_filter(videos, keyword):
+    if len(keyword) > 0:
+        videos = [video for video in videos if keyword in video]
+    return videos
+
+
 def x1y1x2y2_to_xywh(bbox):
     bbox = [int(xx) for xx in bbox]
     x1, y1, x2, y2 = bbox
@@ -294,7 +300,6 @@ def process_video(video, detection, model, output_file_path, device,
         except Exception as e:
             print(traceback.format_exc())
             print('Error processing a frame from video {}'.format(video))
-            pdb.set_trace()
             continue
 
     with open(output_file_path, 'w') as f:
@@ -312,6 +317,7 @@ def run_pose_inference():
                         type=str, help='Path to model weights')
     parser.add_argument('--detection_folder', default=None, required=True, type=str)
     parser.add_argument('--output_folder', default=None, required=True, type=str)
+    parser.add_argument('--filter_keyword', default='', type=str)
     parser.add_argument('--save_video', action='store_true', default=False)
     parser.add_argument('--gpu', type=str, default='0')
     parser.add_argument('--batch', type=int, default=64)
@@ -339,6 +345,8 @@ def run_pose_inference():
 
     detection_files = glob(os.path.join(args.detection_folder, '**/*.json'),
                            recursive=True)
+
+    videos = keyword_filter(videos, args.filter_keyword)
 
     common_videos, common_detections = get_common_videos(videos, detection_files)
 
@@ -370,8 +378,8 @@ def run_pose_inference():
                 print(f"\nSkipping {output_file_path}")
 
         except Exception as e:
+            print(traceback.format_exc())
             print("Error processing video {}: {}".format(video, e))
-            pdb.set_trace()
 
 
 if __name__ == '__main__':

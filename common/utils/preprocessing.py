@@ -1,3 +1,5 @@
+import pdb
+import os
 import numpy as np
 import copy
 import tqdm
@@ -7,6 +9,7 @@ from config import cfg
 import math
 from utils.human_models import smpl, mano, flame
 from utils.transforms import cam2pixel, transform_joint_to_other_db
+from vis import visualize_mesh
 from plyfile import PlyData, PlyElement
 import json
 import traceback
@@ -618,3 +621,46 @@ def process_video(video, detection, model, output_file_path, device,
         json.dump(parameters, f)
 
     cap.release()
+
+
+def IOU(bbox1, bbox2):
+    intersection = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0])) * \
+        min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1])
+    union = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1]) + \
+        (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1]) - intersection
+    return intersection / union
+
+
+def assign_labels(parameters_file_path, labels, IOU_THRESHOLD=0.85):
+
+    result = {}
+
+    parameters = json.load(open(parameters_file_path, 'r'))
+
+    pdb.set_trace()
+
+    try:
+        for row in labels:
+            frame_id = row['frame_id']
+            bbox = row[['x1', 'y1', 'x2', 'y2']].tolist()
+
+            frame_parameters = parameters[str(frame_id)]
+            overlapping_parameters = []
+            for frame_parameter in frame_parameters:
+                parameter_bbox = frame_parameter['bbox']
+                if IOU(bbox, parameter_bbox) > IOU_THRESHOLD:
+                    overlapping_parameters.append(frame_parameter)
+
+            if len(overlapping_parameters) != 1:
+                result[str(frame_id)] = []
+            else:
+                overlapping_parameter = overlapping_parameters[0]
+                overlapping_parameter['identity'] = row['identity']
+                result[str(frame_id)] = overlapping_parameter
+
+    except Exception as e:
+        print(traceback.format_exc())
+        print('Error processing detections from '.format(parameters_file_path))
+        continue
+
+    return result

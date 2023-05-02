@@ -19,7 +19,10 @@ sys.path.insert(0, 'data')
 sys.path.insert(0, 'common')
 from config import cfg
 from model import get_model
-from utils.preprocessing import process_bbox, generate_patch_image
+from utils.preprocessing import assign_labels
+from utils.preparation import (
+    get_common_videos, keyword_filter, remove_substrings_and_strip
+)
 from utils.human_models import smpl, smpl_x, mano, flame
 from utils.vis import render_mesh, save_obj
 from collections import OrderedDict
@@ -28,35 +31,6 @@ import pandas as pd
 import re
 
 transform = transforms.ToTensor()
-
-
-def get_common_videos(videos, jsons):
-    video_names = [Path(video).stem for video in videos]
-    json_names = [Path(json).stem for json in jsons]
-
-    common_video_files = []
-    common_json_files = []
-
-    for video_name, video_file in zip(video_names, videos):
-        for json_name, json_file in zip(json_names, jsons):
-            if video_name == json_name:
-                common_video_files.append(video_file)
-                common_json_files.append(json_file)
-
-    return common_video_files, common_json_files
-
-
-def keyword_filter(videos, keyword):
-    if len(keyword) > 0:
-        videos = [video for video in videos if keyword in video]
-    return videos
-
-
-def remove_substrings_and_strip(s, pattern):
-    if isinstance(s, str):
-        return re.sub(pattern, '', s).strip()
-    return s
-
 
 
 def run_pose_inference():

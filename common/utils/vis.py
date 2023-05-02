@@ -10,7 +10,7 @@ import os
 import pyrender
 import trimesh
 
-from human_models import smpl
+from utils.human_models import smpl
 
 def vis_keypoints_with_skeleton(img, kps, kps_lines, kp_thresh=0.4, alpha=1):
     # Convert from plt 0-1 RGBA colors to 0-255 BGR colors for opencv.

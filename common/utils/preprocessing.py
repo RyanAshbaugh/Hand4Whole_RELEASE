@@ -1,4 +1,6 @@
 import numpy as np
+import copy
+import tqdm
 import cv2
 import random
 from config import cfg
@@ -6,7 +8,14 @@ import math
 from utils.human_models import smpl, mano, flame
 from utils.transforms import cam2pixel, transform_joint_to_other_db
 from plyfile import PlyData, PlyElement
+import json
+import traceback
+
 import torch
+import torchvision.transforms as transforms
+
+transform = transforms.ToTensor()
+
 
 def load_img(path, order='RGB'):
     img = cv2.imread(path, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
@@ -390,3 +399,222 @@ def load_obj(file_name):
     return np.stack(v)
 
 
+def x1y1x2y2_to_xywh(bbox):
+    bbox = [int(xx) for xx in bbox]
+    x1, y1, x2, y2 = bbox
+    return [x1, y1, x2 - x1, y2 - y1]
+
+
+def square_bbox(bbox):
+    bbox = [int(xx) for xx in bbox]
+    x1, y1, w, h = bbox
+    if w > h:
+        y1 = max(0, y1 - int((w - h) / 2))
+        h = w
+    elif h > w:
+        x1 = max(0, x1 - int((h - w) / 2))
+        w = h
+    return [x1, y1, w, h]
+
+
+def pad_bbox(bbox, width, height, padding=0.5):
+    bbox = [int(xx) for xx in bbox]
+    x1, y1, w, h = bbox
+    x2 = x1 + w
+    y2 = y1 + h
+    x1 = max(0, x1 - int(w * padding))
+    y1 = max(0, y1 - int(h * padding))
+    x2 = min(width, x2 + int(w * padding))
+    y2 = min(height, y2 + int(h * padding))
+    return [x1, y1, x2 - x1, y2 - y1]
+
+
+def process_image_batch(images, bboxes, model, cfg, device):
+
+    rois = torch.zeros((len(images), 3, *cfg.input_img_shape),
+                       dtype=torch.float32).to(device)
+    for ii, (image, bbox) in enumerate(zip(images, bboxes)):
+        if bbox is not None:
+            roi, img2bb_trans, bb2img_trans = generate_patch_image(
+                image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
+
+            rois[ii, :, :, :] = transform(roi) / 255.
+
+    inputs = {'img': rois}
+    targets = {}
+    meta_info = {}
+    with torch.no_grad():
+        return model(inputs, targets, meta_info, 'test')
+
+
+def process_image(image, bbox, model, cfg, device):
+    img, img2bb_trans, bb2img_trans = generate_patch_image(
+        image, bbox, 1.0, 0.0, False, cfg.input_img_shape)
+
+    img = (transform(img.astype(np.float32)) / 255.).to(device)
+
+    if len(img.shape) == 3:
+        img = img.unsqueeze(0)
+
+    inputs = {'img': img}
+    targets = {}
+    meta_info = {}
+    with torch.no_grad():
+        return model(inputs, targets, meta_info, 'test')
+
+
+def video_frame_generator(video, detection, batch_size=1):
+
+    cap = cv2.VideoCapture(video)
+    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    num_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+    detections = json.load(open(detection, 'r'))
+
+    frame_batch = []
+    bbox_batch = []
+    frame_ids = []
+
+    assert len(detections) == num_frames, \
+        'Number of frames in video and detection file do not match'
+
+    for ii in range(int(num_frames)):
+        try:
+            success, image = cap.read()
+
+            if not success:
+                frame_batch.append(image)
+                bbox_batch.append(None)
+                frame_ids.append(ii)
+
+                if len(frame_batch) > 0:
+                    yield frame_batch, bbox_batch, frame_ids
+                    frame_batch = []
+                    bbox_batch = []
+                    frame_ids = []
+                print('Error reading frame {} from video {}'.format(ii, video))
+                continue
+
+            if detections[str(ii)] != []:
+                bboxes = [process_bbox(x1y1x2y2_to_xywh(box[:4]), width, height)
+                          for box in detections[str(ii)] if box[-1] == 1.0]
+                for bbox in bboxes:
+
+                    frame_batch.append(image)
+                    bbox_batch.append(bbox)
+                    frame_ids.append(ii)
+
+                    if len(frame_batch) == batch_size:
+                        yield frame_batch, bbox_batch, frame_ids
+                        frame_batch = []
+                        bbox_batch = []
+                        frame_ids = []
+
+            else:
+                frame_batch.append(image)
+                bbox_batch.append(None)
+                frame_ids.append(ii)
+
+                if len(frame_batch) == batch_size:
+                    yield frame_batch, bbox_batch, frame_ids
+                    frame_batch = []
+                    bbox_batch = []
+                    frame_ids = []
+
+        except Exception as e:
+            print(traceback.format_exc())
+            print('Error processing frame {} from video {}'.format(ii, video))
+            continue
+
+    cap.release()
+
+
+def process_video(video, detection, model, output_file_path, device,
+                  batch_size=1, save_video=False):
+
+    result = {}
+
+    cap = cv2.VideoCapture(video)
+    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    cap_fps = cap.get(cv2.CAP_PROP_FPS)
+    num_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+    detections = json.load(open(detection, 'r'))
+
+    assert len(detections) == num_frames, \
+        'Number of frames in video and detection file do not match'
+
+    if save_video:
+        video_file_path = output_file_path.replace(
+            "parameters", "video").replace(".json", ".mp4")
+        if not os.path.exists('/'.join(video_file_path.split('/')[:-1])):
+            os.makedirs('/'.join(video_file_path.split('/')[:-1]),
+                        exist_ok=True)
+
+        video_writer_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(
+            video_file_path,
+            video_writer_fourcc,
+            cap_fps,
+            (int(width), int(height))
+        )
+
+    count = 0
+    parameters = {}
+    for frame_batch, bbox_batch, frame_ids in \
+            tqdm(video_frame_generator(video, detection, batch_size=batch_size),
+                 desc=f'Processing {video.split("/")[-1]}'):
+        try:
+            outputs = process_image_batch(frame_batch, bbox_batch, model, cfg, device)
+
+            rendered_batch = {}
+            for ii in range(len(frame_batch)):
+                frame_id = frame_ids[ii]
+                if frame_id not in rendered_batch:
+                    rendered_batch[frame_id] = copy.deepcopy(frame_batch[ii])
+
+                if frame_id not in parameters:
+                    parameters[frame_id] = []
+                frame_parameters = {}
+
+                if bbox_batch[ii] is not None:
+                    cam_trans = outputs['cam_trans'][ii, ...].cpu().tolist()
+                    smpl_pose = outputs['smpl_pose'][ii, ...].cpu().tolist()
+                    smpl_shape = outputs['smpl_shape'][ii, ...].cpu().tolist()
+                    bbox = bbox_batch[ii].tolist()
+                else:
+                    cam_trans, smpl_pose, smpl_shape, bbox = None, None, None, None
+                frame_parameters['cam_trans'] = cam_trans
+                frame_parameters['smpl_pose'] = smpl_pose
+                frame_parameters['smpl_shape'] = smpl_shape
+                frame_parameters['bbox'] = bbox
+                parameters[frame_id].append(frame_parameters)
+
+                if save_video and frame_batch[ii] is not None:
+                    rendered_batch[frame_id] = visualize_mesh(
+                        {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
+                        bbox_batch[ii],
+                        rendered_batch[frame_id],
+                        cfg
+                    )
+
+            rendered_frame_ids = sorted(rendered_batch.keys())
+            for frame_id in rendered_frame_ids:
+                if save_video:
+                    video_writer.write(rendered_batch[frame_id])
+
+            count += batch_size
+            # if count >= 200:
+            #     break
+
+        except Exception as e:
+            print(traceback.format_exc())
+            print('Error processing a frame from video {}'.format(video))
+            continue
+
+    with open(output_file_path, 'w') as f:
+        json.dump(parameters, f)
+
+    cap.release()

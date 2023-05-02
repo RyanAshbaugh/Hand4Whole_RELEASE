@@ -5,11 +5,14 @@ import copy
 import tqdm
 import cv2
 import random
+
+import sys
+sys.path.append('main')
 from config import cfg
-import math
+sys.path.append('common')
 from utils.human_models import smpl, mano, flame
 from utils.transforms import cam2pixel, transform_joint_to_other_db
-from vis import visualize_mesh
+from utils.vis import visualize_mesh
 from plyfile import PlyData, PlyElement
 import json
 import traceback
@@ -637,10 +640,8 @@ def assign_labels(parameters_file_path, labels, IOU_THRESHOLD=0.85):
 
     parameters = json.load(open(parameters_file_path, 'r'))
 
-    pdb.set_trace()
-
-    try:
-        for row in labels:
+    for row in labels:
+        try:
             frame_id = row['frame_id']
             bbox = row[['x1', 'y1', 'x2', 'y2']].tolist()
 
@@ -658,9 +659,9 @@ def assign_labels(parameters_file_path, labels, IOU_THRESHOLD=0.85):
                 overlapping_parameter['identity'] = row['identity']
                 result[str(frame_id)] = overlapping_parameter
 
-    except Exception as e:
-        print(traceback.format_exc())
-        print('Error processing detections from '.format(parameters_file_path))
-        continue
+        except Exception as e:
+            print(traceback.format_exc())
+            print('Error processing detections from '.format(parameters_file_path))
+            continue
 
     return result

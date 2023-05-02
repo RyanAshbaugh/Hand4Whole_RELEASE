@@ -10,6 +10,8 @@ import os
 import pyrender
 import trimesh
 
+from human_models import smpl
+
 def vis_keypoints_with_skeleton(img, kps, kps_lines, kp_thresh=0.4, alpha=1):
     # Convert from plt 0-1 RGBA colors to 0-255 BGR colors for opencv.
     cmap = plt.get_cmap('rainbow')
@@ -161,3 +163,28 @@ def save_obj(v, f, file_name='output.obj'):
         obj_file.write('f ' + str(f[i][0]+1) + '/' + str(f[i][0]+1) + ' ' + str(f[i][1]+1) + '/' + str(f[i][1]+1) + ' ' + str(f[i][2]+1) + '/' + str(f[i][2]+1) + '\n')
     obj_file.close()
 
+
+def visualize_mesh(output, bbox, image, cfg):
+
+    if bbox is not None and 'smpl_mesh_cam' in output:
+
+        mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
+
+        focal = [cfg.focal[0] / cfg.input_img_shape[1] * bbox[2],
+                cfg.focal[1] / cfg.input_img_shape[0] * bbox[3]]
+        principal_pt = [
+            cfg.princpt[0] / cfg.input_img_shape[1] * bbox[2] + bbox[0],
+            cfg.princpt[1] / cfg.input_img_shape[0] * bbox[3] + bbox[1]]
+        image = cv2.rectangle(
+            image,
+            (int(bbox[0]), int(bbox[1])),
+            (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])),
+            (0, 255, 0), 2)
+
+        image = render_mesh(
+            image,
+            mesh,
+            smpl.face,
+            {'focal': focal, 'princpt': principal_pt}).astype(np.uint8)
+
+    return image

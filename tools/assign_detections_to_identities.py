@@ -50,7 +50,8 @@ def run_detection_identity_assignment():
     assert len(common_videos) == len(common_parameters), \
         "Number of videos and detection files should be same"
 
-    substrings_to_remove = [',', '(', ')', 'Frame', 'frame']
+    substrings_to_remove = [',', '(', ')', '[', ']', 'Frame', 'frame']
+
     pattern = '|'.join(map(re.escape, substrings_to_remove))
 
     for ii, (video, parameter_file_path) in enumerate(
@@ -87,10 +88,9 @@ def run_detection_identity_assignment():
             '/'.join(video.split('/')[-5:]).replace('.mp4', '.json')
         )
 
-        pdb.set_trace()
-
         try:
             if not os.path.exists(output_file_path):
+                os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
                 os.system(f"touch {output_file_path}")
                 labeled_parameters = assign_labels(parameter_file_path, labels)
                 with open(output_file_path, 'w') as f:

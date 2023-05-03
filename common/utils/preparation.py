@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from collections import OrderedDict
 
@@ -30,3 +31,9 @@ def keyword_filter(videos, keyword):
     if len(keyword) > 0:
         videos = [video for video in videos if keyword in video]
     return videos
+
+
+def remove_substrings_and_strip(s, pattern):
+    if isinstance(s, str):
+        return re.sub(pattern, '', s).strip()
+    return s

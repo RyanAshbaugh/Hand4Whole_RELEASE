@@ -2,9 +2,9 @@ import pdb
 import os
 import numpy as np
 import copy
-import tqdm
 import cv2
 import random
+from tqdm import tqdm
 
 import sys
 sys.path.append('main')
@@ -626,38 +626,51 @@ def process_video(video, detection, model, output_file_path, device,
     cap.release()
 
 
-def IOU(bbox1, bbox2):
-    intersection = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0])) * \
-        min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1])
-    union = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1]) + \
-        (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1]) - intersection
-    return intersection / union
+def intersection_over_face_xywh(face_box, body_box):
+    face_x1, face_y1, face_w, face_h = face_box
+    body_x1, body_y1, body_w, body_h = body_box
+    face_x2 = face_x1 + face_w
+    face_y2 = face_y1 + face_h
+    body_x2 = body_x1 + body_w
+    body_y2 = body_y1 + body_h
+
+    intersection = max(0, min(face_x2, body_x2) - max(face_x1, body_x1)) * \
+        max(0, min(face_y2, body_y2) - max(face_y1, body_y1))
+    face_area = face_box[2] * face_box[3]
+
+    return intersection / face_area
 
 
-def assign_labels(parameters_file_path, labels, IOU_THRESHOLD=0.85):
+def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
 
     result = {}
 
     parameters = json.load(open(parameters_file_path, 'r'))
 
-    for row in labels:
+    for ii, row in labels.iterrows():
         try:
-            frame_id = row['frame_id']
-            bbox = row[['x1', 'y1', 'x2', 'y2']].tolist()
+            frame_id = row['frame']
+            bbox = x1y1x2y2_to_xywh(row[['x1', 'y1', 'x2', 'y2']].tolist())
 
-            frame_parameters = parameters[str(frame_id)]
-            overlapping_parameters = []
-            for frame_parameter in frame_parameters:
-                parameter_bbox = frame_parameter['bbox']
-                if IOU(bbox, parameter_bbox) > IOU_THRESHOLD:
-                    overlapping_parameters.append(frame_parameter)
+            if frame_id in parameters:
+                frame_parameters = parameters[frame_id]
+                overlapping_parameters = []
+                for frame_parameter in frame_parameters:
+                    parameter_bbox = frame_parameter['bbox']
+                    if parameter_bbox is not None:
+                        intersection = intersection_over_face_xywh(
+                            bbox, parameter_bbox)
+                        if intersection >= overlap_threshold:
+                            overlapping_parameters.append(frame_parameter)
 
-            if len(overlapping_parameters) != 1:
-                result[str(frame_id)] = []
+                if len(overlapping_parameters) != 1:
+                    result[frame_id] = []
+                else:
+                    overlapping_parameter = overlapping_parameters[0]
+                    overlapping_parameter['identity'] = row['identity']
+                    result[frame_id] = overlapping_parameter
             else:
-                overlapping_parameter = overlapping_parameters[0]
-                overlapping_parameter['identity'] = row['identity']
-                result[str(frame_id)] = overlapping_parameter
+                continue
 
         except Exception as e:
             print(traceback.format_exc())

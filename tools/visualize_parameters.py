@@ -10,19 +10,20 @@ sys.path.insert(0, 'data')
 sys.path.insert(0, 'common')
 from utils.preprocessing import visualize_labeled_video
 from utils.preparation import keyword_filter, get_common_videos
+from config import cfg
 
 
-def run_pose_inference():
+def run_parameter_visualization():
     parser = argparse.ArgumentParser()
     parser.add_argument('--video', type=str,
                         default='/research/iprobe/datastore/datasets/face/iiit-dronesurf/',
                         help='Path to video or folder of videos')
-    parser.add_argument('--model', default='demo/body/snapshot_6_body.pth.tar',
-                        type=str, help='Path to model weights')
     parser.add_argument('--parameter_folder', default=None, required=True, type=str)
     parser.add_argument('--output_folder', default=None, required=True, type=str)
     parser.add_argument('--filter_keyword', default='', type=str)
     args = parser.parse_args()
+
+    cfg.set_args('0', 'body')
 
     if not os.path.exists(args.output_folder):
         os.makedirs(args.output_folder, exist_ok=True)
@@ -72,4 +73,4 @@ def run_pose_inference():
 
 
 if __name__ == '__main__':
-    run_pose_inference()
+    run_parameter_visualization()

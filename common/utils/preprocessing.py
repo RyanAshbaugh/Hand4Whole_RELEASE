@@ -469,18 +469,21 @@ def process_image(image, bbox, model, cfg, device):
         return model(inputs, targets, meta_info, 'test')
 
 
-def video_frame_generator(video, detection, batch_size=1):
-
-    cap = cv2.VideoCapture(video)
+def create_video_capture(video_path):
+    cap = cv2.VideoCapture(video_path)
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     num_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
 
+    return cap, width, height, num_frames
+
+
+def video_frame_generator(video, detection, batch_size=1):
+
+    cap, width, height, num_frames = create_video_capture(video)
     detections = json.load(open(detection, 'r'))
 
-    frame_batch = []
-    bbox_batch = []
-    frame_ids = []
+    frame_batch, bbox_batch, frame_ids = [], [], []
 
     assert len(detections) == num_frames, \
         'Number of frames in video and detection file do not match'
@@ -496,9 +499,7 @@ def video_frame_generator(video, detection, batch_size=1):
 
                 if len(frame_batch) > 0:
                     yield frame_batch, bbox_batch, frame_ids
-                    frame_batch = []
-                    bbox_batch = []
-                    frame_ids = []
+                    frame_batch, bbox_batch, frame_ids = [], [], []
                 print('Error reading frame {} from video {}'.format(ii, video))
                 continue
 
@@ -513,9 +514,7 @@ def video_frame_generator(video, detection, batch_size=1):
 
                     if len(frame_batch) == batch_size:
                         yield frame_batch, bbox_batch, frame_ids
-                        frame_batch = []
-                        bbox_batch = []
-                        frame_ids = []
+                        frame_batch, bbox_batch, frame_ids = [], [], []
 
             else:
                 frame_batch.append(image)
@@ -524,9 +523,58 @@ def video_frame_generator(video, detection, batch_size=1):
 
                 if len(frame_batch) == batch_size:
                     yield frame_batch, bbox_batch, frame_ids
-                    frame_batch = []
-                    bbox_batch = []
-                    frame_ids = []
+                    frame_batch, bbox_batch, frame_ids = [], [], []
+
+        except Exception as e:
+            print(traceback.format_exc())
+            print('Error processing frame {} from video {}'.format(ii, video))
+            continue
+
+    cap.release()
+
+
+def video_frame_labeled_parameter_generator(video, parameters_file, batch_size=1):
+
+    cap, width, height, num_frames = create_video_capture(video)
+    parameters = json.load(open(parameters_file, 'r'))
+
+    frame_batch, parameters_batch, frame_ids = [], [], []
+
+    for ii in range(int(num_frames)):
+        try:
+            success, image = cap.read()
+
+            if not success:
+                frame_batch.append(image)
+                parameters_batch.append(None)
+                frame_ids.append(ii)
+
+                if len(frame_batch) > 0:
+                    yield frame_batch, parameters_batch, frame_ids
+                    frame_batch, parameters_batch, frame_ids = [], [], []
+                print('Error reading frame {} from video {}'.format(ii, video))
+                continue
+
+            if str(ii) in parameters and parameters[str(ii)] != []:
+
+                for parameter in parameters[str(ii)]:
+
+                    frame_batch.append(image)
+                    parameters_batch.append(parameter)
+                    frame_ids.append(ii)
+
+                    if len(frame_batch) == batch_size:
+                        yield frame_batch, parameters_batch, frame_ids
+                        frame_batch, parameters_batch, frame_ids = [], [], []
+
+            else:
+                frame_batch.append(image)
+                parameters_batch.append(None)
+                frame_ids.append(ii)
+
+                if len(frame_batch) == batch_size:
+                    yield frame_batch, parameters_batch, frame_ids
+                    frame_batch, parameters_batch, frame_ids = [], [], []
 
         except Exception as e:
             print(traceback.format_exc())
@@ -651,6 +699,7 @@ def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
         try:
             frame_id = row['frame']
             bbox = x1y1x2y2_to_xywh(row[['x1', 'y1', 'x2', 'y2']].tolist())
+            result[frame_id] = []
 
             if frame_id in parameters:
                 frame_parameters = parameters[frame_id]
@@ -663,12 +712,10 @@ def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
                         if intersection >= overlap_threshold:
                             overlapping_parameters.append(frame_parameter)
 
-                if len(overlapping_parameters) != 1:
-                    result[frame_id] = []
-                else:
+                if len(overlapping_parameters) == 1:
                     overlapping_parameter = overlapping_parameters[0]
                     overlapping_parameter['identity'] = row['identity']
-                    result[frame_id] = overlapping_parameter
+                    result[frame_id].append(overlapping_parameter)
             else:
                 continue
 
@@ -678,3 +725,86 @@ def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
             continue
 
     return result
+
+
+def visualize_labeled_video(video_file_path, parameter_file_path, labeled_video_path,
+                            batch_size=64):
+
+    cap = cv2.VideoCapture(video_file_path)
+    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    cap_fps = cap.get(cv2.CAP_PROP_FPS)
+    num_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+    if not os.path.exists('/'.join(video_file_path.split('/')[:-1])):
+        os.makedirs('/'.join(video_file_path.split('/')[:-1]),
+                    exist_ok=True)
+
+    video_writer_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    video_writer = cv2.VideoWriter(
+        video_file_path,
+        video_writer_fourcc,
+        cap_fps,
+        (int(width), int(height))
+    )
+
+    count = 0
+    parameters = {}
+    pdb.set_trace()
+    for frame_batch, parameters_batch, frame_ids in \
+            tqdm(video_frame_labeled_parameter_generator(
+                video_file_path, parameter_file_path, batch_size=batch_size),
+                desc=f'Processing {video_file_path.split("/")[-1]}'):
+        try:
+
+            rendered_batch = {}
+            for ii in range(len(frame_batch)):
+                frame_id = frame_ids[ii]
+                if frame_id not in rendered_batch:
+                    rendered_batch[frame_id] = copy.deepcopy(frame_batch[ii])
+
+                if frame_id not in parameters:
+                    parameters[frame_id] = []
+
+                if parameters_batch[ii] is not None:
+                    # cam_trans = parameters_batch[ii]['cam_trans']
+                    # smpl_pose = parameters_batch[ii]['smpl_pose']
+                    # smpl_shape = parameters_batch[ii]['smpl_shape']
+                    bbox = parameters_batch[ii]['bbox']
+                    frame_parameters = {
+                        k: v for k, v in parameters_batch[ii].items() if
+                        k in ['cam_trans', 'smpl_pose', 'smpl_shape']
+                    }
+                    # identity = parameters_batch[ii]['identity']
+                    rendered_batch[frame_id] = visualize_mesh(
+                        # {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
+                        {k: torch.tensor(v).unsqueeze(0) for k, v in frame_parameters.items()},
+                        bbox,
+                        rendered_batch[frame_id],
+                        cfg
+                    )
+                # else:
+                #     cam_trans, smpl_pose, smpl_shape, bbox, identity = 5 * [None]
+                # frame_parameters['cam_trans'] = cam_trans
+                # frame_parameters['smpl_pose'] = smpl_pose
+                # frame_parameters['smpl_shape'] = smpl_shape
+                # frame_parameters['bbox'] = bbox
+                # frame_parameters['identity'] = int(identity)
+                # parameters[frame_id].append(frame_parameters)
+
+                # if parameters_batch[ii] is not None:
+
+            pdb.set_trace()
+            rendered_frame_ids = sorted(rendered_batch.keys())
+            for frame_id in rendered_frame_ids:
+                video_writer.write(rendered_batch[frame_id])
+
+            count += batch_size
+
+        except Exception as e:
+            print(traceback.format_exc())
+            print('Error processing a frame from video {}'.format(video_file_path))
+            pdb.set_trace()
+            continue
+
+    cap.release()

@@ -1,6 +1,10 @@
+import pdb
 import os
 import cv2
+import json
+import copy
 import numpy as np
+from tqdm import tqdm
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -9,6 +13,8 @@ import os
 # os.environ["PYOPENGL_PLATFORM"] = "egl"
 import pyrender
 import trimesh
+import torch
+import traceback
 
 from utils.human_models import smpl
 

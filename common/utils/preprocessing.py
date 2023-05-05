@@ -12,7 +12,7 @@ from config import cfg
 sys.path.append('common')
 from utils.human_models import smpl, mano, flame
 from utils.transforms import cam2pixel, transform_joint_to_other_db
-from utils.vis import visualize_mesh
+from utils.vis import visualize_mesh, prepareMeshForRendering
 from plyfile import PlyData, PlyElement
 import json
 import traceback
@@ -647,8 +647,11 @@ def process_video(video, detection, model, output_file_path, device,
                 parameters[frame_id].append(frame_parameters)
 
                 if save_video and frame_batch[ii] is not None:
+                    pdb.set_trace()
                     rendered_batch[frame_id] = visualize_mesh(
-                        {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
+                        outputs['smpl_mesh_cam'][ii, ...].unsqueeze(0),
+                        # outputs['smpl_mesh_cam'].detach().cpu().numpy()[ii, ...].unsqueeze(0),
+                        # {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
                         bbox_batch[ii],
                         rendered_batch[frame_id],
                         cfg
@@ -671,6 +674,7 @@ def process_video(video, detection, model, output_file_path, device,
     with open(output_file_path, 'w') as f:
         json.dump(parameters, f)
 
+    video_writer.release()
     cap.release()
 
 
@@ -727,7 +731,39 @@ def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
     return result
 
 
-def visualize_labeled_video(video_file_path, parameter_file_path, labeled_video_path,
+def generate_mesh(smpl_layer, root_pose, body_pose, cam_trans, shape, cfg, device):
+    batch_size = root_pose.shape[0]
+
+    smpl_output = smpl_layer(root_pose, body_pose, shape)
+    mesh_cam = smpl_output.vertices
+    joint_cam = torch.bmm(
+        torch.from_numpy(
+            smpl.joint_regressor
+        ).to(device)[None, :, :].repeat(batch_size, 1, 1),
+        mesh_cam
+    )
+    root_joint_idx = smpl.root_joint_idx
+    x = (joint_cam[:,:,0] + cam_trans[:,None,0]) / \
+        (joint_cam[:,:,2] + cam_trans[:,None,2] + 1e-4) * \
+        cfg.focal[0] + cfg.princpt[0]
+    y = (joint_cam[:,:,1] + cam_trans[:,None,1]) / \
+        (joint_cam[:,:,2] + cam_trans[:,None,2] + 1e-4) * \
+        cfg.focal[1] + cfg.princpt[1]
+    x = x / cfg.input_img_shape[1] * cfg.output_hm_shape[2]
+    y = y / cfg.input_img_shape[0] * cfg.output_hm_shape[1]
+    joint_proj = torch.stack((x,y),2)
+
+    # root-relative 3D coordinates
+    root_cam = joint_cam[:,root_joint_idx,None,:]
+    joint_cam = joint_cam - root_cam
+
+    # add camera translation for the rendering
+    mesh_cam = mesh_cam + cam_trans[:,None,:]
+    return joint_proj, joint_cam, mesh_cam
+
+
+def visualize_labeled_video(video_file_path, parameter_file_path,
+                            labeled_video_path, smpl_layer, cfg, device,
                             batch_size=64):
 
     cap = cv2.VideoCapture(video_file_path)
@@ -742,7 +778,7 @@ def visualize_labeled_video(video_file_path, parameter_file_path, labeled_video_
 
     video_writer_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(
-        video_file_path,
+        labeled_video_path,
         video_writer_fourcc,
         cap_fps,
         (int(width), int(height))
@@ -750,7 +786,6 @@ def visualize_labeled_video(video_file_path, parameter_file_path, labeled_video_
 
     count = 0
     parameters = {}
-    pdb.set_trace()
     for frame_batch, parameters_batch, frame_ids in \
             tqdm(video_frame_labeled_parameter_generator(
                 video_file_path, parameter_file_path, batch_size=batch_size),
@@ -763,38 +798,39 @@ def visualize_labeled_video(video_file_path, parameter_file_path, labeled_video_
                 if frame_id not in rendered_batch:
                     rendered_batch[frame_id] = copy.deepcopy(frame_batch[ii])
 
-                if frame_id not in parameters:
-                    parameters[frame_id] = []
-
                 if parameters_batch[ii] is not None:
-                    # cam_trans = parameters_batch[ii]['cam_trans']
-                    # smpl_pose = parameters_batch[ii]['smpl_pose']
-                    # smpl_shape = parameters_batch[ii]['smpl_shape']
-                    bbox = parameters_batch[ii]['bbox']
-                    frame_parameters = {
-                        k: v for k, v in parameters_batch[ii].items() if
-                        k in ['cam_trans', 'smpl_pose', 'smpl_shape']
-                    }
-                    # identity = parameters_batch[ii]['identity']
+                    # frame_parameters = {
+                    #     k: v for k, v in parameters_batch[ii].items() if
+                    #     k in ['cam_trans', 'smpl_pose', 'smpl_shape']
+                    # }
+
+                    root_pose, body_pose, shape = [
+                        torch.tensor(xx).unsqueeze(0).to(device) for xx in
+                        [parameters_batch[ii]['smpl_pose'][:3],
+                         parameters_batch[ii]['smpl_pose'][3:],
+                         parameters_batch[ii]['smpl_shape']]
+                    ]
+
+                    mesh = smpl_layer(
+                        global_orient=root_pose,
+                        body_pose=body_pose,
+                        betas=shape
+                    )
+
+                    joint_proj, joint_cam, mesh_cam = prepareMeshForRendering(
+                        parameters_batch[ii]['cam_trans'],
+                        mesh.vertices,
+                        cfg,
+                        device
+                    )
+
                     rendered_batch[frame_id] = visualize_mesh(
-                        # {k: v[ii, ...].unsqueeze(0) for k, v in outputs.items()},
-                        {k: torch.tensor(v).unsqueeze(0) for k, v in frame_parameters.items()},
-                        bbox,
+                        mesh_cam,
+                        parameters_batch[ii]['bbox'],
                         rendered_batch[frame_id],
                         cfg
                     )
-                # else:
-                #     cam_trans, smpl_pose, smpl_shape, bbox, identity = 5 * [None]
-                # frame_parameters['cam_trans'] = cam_trans
-                # frame_parameters['smpl_pose'] = smpl_pose
-                # frame_parameters['smpl_shape'] = smpl_shape
-                # frame_parameters['bbox'] = bbox
-                # frame_parameters['identity'] = int(identity)
-                # parameters[frame_id].append(frame_parameters)
 
-                # if parameters_batch[ii] is not None:
-
-            pdb.set_trace()
             rendered_frame_ids = sorted(rendered_batch.keys())
             for frame_id in rendered_frame_ids:
                 video_writer.write(rendered_batch[frame_id])
@@ -804,7 +840,7 @@ def visualize_labeled_video(video_file_path, parameter_file_path, labeled_video_
         except Exception as e:
             print(traceback.format_exc())
             print('Error processing a frame from video {}'.format(video_file_path))
-            pdb.set_trace()
             continue
 
+    video_writer.release()
     cap.release()

@@ -170,11 +170,13 @@ def save_obj(v, f, file_name='output.obj'):
     obj_file.close()
 
 
-def visualize_mesh(output, bbox, image, cfg):
+def visualize_mesh(vertices, bbox, image, cfg, identity=None):
 
-    if bbox is not None and 'smpl_mesh_cam' in output:
+    if bbox is not None and vertices is not None:
+    # if bbox is not None and 'smpl_mesh_cam' in output:
 
-        mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
+        # mesh = output['smpl_mesh_cam'].detach().cpu().numpy()[0]
+        mesh = vertices.detach().cpu().numpy()[0]
 
         focal = [cfg.focal[0] / cfg.input_img_shape[1] * bbox[2],
                 cfg.focal[1] / cfg.input_img_shape[0] * bbox[3]]
@@ -187,6 +189,14 @@ def visualize_mesh(output, bbox, image, cfg):
             (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])),
             (0, 255, 0), 2)
 
+        if identity is not None:
+            image = cv2.putText(
+                image,
+                str(identity),
+                (int(bbox[0]), int(bbox[1])),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1, (0, 255, 0), 2)
+
         image = render_mesh(
             image,
             mesh,
@@ -194,3 +204,39 @@ def visualize_mesh(output, bbox, image, cfg):
             {'focal': focal, 'princpt': principal_pt}).astype(np.uint8)
 
     return image
+
+
+def project3Dto2D(joint, cam_trans, cfg):
+    x, y = [(joint[:, :, ii] + cam_trans[:, None, ii]) /
+            (joint[:, :, 2] + cam_trans[:, None, 2] + 1e-4) *
+            cfg.focal[ii] + cfg.princpt[ii] for ii in range(2)]
+
+    x = x / cfg.input_img_shape[1] * cfg.output_hm_shape[2]
+    y = y / cfg.input_img_shape[0] * cfg.output_hm_shape[1]
+
+    return torch.stack((x, y), 2)
+
+
+def prepareMeshForRendering(cam_trans, mesh, cfg, device):
+
+    cam_trans = torch.as_tensor(
+        cam_trans,
+        dtype=torch.float32
+    ).to(device).unsqueeze(0)
+
+    joint_cam = torch.bmm(
+        torch.from_numpy(
+            smpl.joint_regressor
+        ).to(device)[None, :, :].repeat(mesh.shape[0], 1, 1),
+        mesh
+    )
+
+    joint_proj = project3Dto2D(joint_cam, cam_trans, cfg)
+
+    # root-relative 3D coordinates
+    root_cam = joint_cam[:, smpl.root_joint_idx, None, :]
+    joint_cam = joint_cam - root_cam
+
+    # add camera translation for the rendering
+    mesh_cam = mesh + cam_trans[:, None, :]
+    return joint_proj, joint_cam, mesh_cam

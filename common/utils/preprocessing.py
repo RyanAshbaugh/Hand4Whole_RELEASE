@@ -647,7 +647,6 @@ def process_video(video, detection, model, output_file_path, device,
                 parameters[frame_id].append(frame_parameters)
 
                 if save_video and frame_batch[ii] is not None:
-                    pdb.set_trace()
                     rendered_batch[frame_id] = visualize_mesh(
                         outputs['smpl_mesh_cam'][ii, ...].unsqueeze(0),
                         # outputs['smpl_mesh_cam'].detach().cpu().numpy()[ii, ...].unsqueeze(0),
@@ -703,7 +702,9 @@ def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
         try:
             frame_id = row['frame']
             bbox = x1y1x2y2_to_xywh(row[['x1', 'y1', 'x2', 'y2']].tolist())
-            result[frame_id] = []
+
+            if frame_id not in result:
+                result[frame_id] = []
 
             if frame_id in parameters:
                 frame_parameters = parameters[frame_id]
@@ -828,7 +829,9 @@ def visualize_labeled_video(video_file_path, parameter_file_path,
                         mesh_cam,
                         parameters_batch[ii]['bbox'],
                         rendered_batch[frame_id],
-                        cfg
+                        cfg,
+                        parameters_batch[ii]['identity'] if 'identity' in
+                        parameters_batch[ii] else None,
                     )
 
             rendered_frame_ids = sorted(rendered_batch.keys())

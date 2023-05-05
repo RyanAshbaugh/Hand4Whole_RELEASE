@@ -3,6 +3,7 @@ import argparse
 import traceback
 from tqdm import tqdm
 from glob import glob
+import copy
 
 import sys
 sys.path.insert(0, 'main')
@@ -11,6 +12,9 @@ sys.path.insert(0, 'common')
 from utils.preprocessing import visualize_labeled_video
 from utils.preparation import keyword_filter, get_common_videos
 from config import cfg
+
+import torch
+from utils.human_models import smpl
 
 
 def run_parameter_visualization():
@@ -21,9 +25,15 @@ def run_parameter_visualization():
     parser.add_argument('--parameter_folder', default=None, required=True, type=str)
     parser.add_argument('--output_folder', default=None, required=True, type=str)
     parser.add_argument('--filter_keyword', default='', type=str)
+    parser.add_argument('--gpu', default='0', type=str)
+    parser.add_argument('--batch', default=64, type=int)
     args = parser.parse_args()
 
+    device = torch.device('cuda:' + args.gpu)
+
     cfg.set_args('0', 'body')
+
+    smpl_layer = copy.deepcopy(smpl.layer['neutral']).to(device)
 
     if not os.path.exists(args.output_folder):
         os.makedirs(args.output_folder, exist_ok=True)
@@ -62,8 +72,15 @@ def run_parameter_visualization():
 
         try:
             if not os.path.exists(labeled_video_path):
-                os.system(f"touch {labeled_video_path}")
-                visualize_labeled_video(video, parameter_file_path, labeled_video_path)
+                visualize_labeled_video(
+                    video,
+                    parameter_file_path,
+                    labeled_video_path,
+                    smpl_layer,
+                    cfg,
+                    device,
+                    args.batch
+                )
             else:
                 print(f"\nSkipping {labeled_video_path}")
 

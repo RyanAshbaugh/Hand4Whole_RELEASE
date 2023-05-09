@@ -692,7 +692,17 @@ def intersection_over_face_xywh(face_box, body_box):
     return intersection / face_area
 
 
-def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
+def shrink_bbox(bbox, shrink_to=0.8):
+    # x1, y1, w, h
+    bbox = np.array(bbox)
+    bbox[:2] = bbox[:2] + (1 - shrink_to) / 2 * bbox[2:]
+    bbox[2:] = bbox[2:] * shrink_to
+
+    return bbox.tolist()
+
+
+def assign_labels(parameters_file_path, labels, overlap_threshold=1.0,
+                  shrink_bbox_to=0.8):
 
     result = {}
 
@@ -702,6 +712,7 @@ def assign_labels(parameters_file_path, labels, overlap_threshold=1.0):
         try:
             frame_id = row['frame']
             bbox = x1y1x2y2_to_xywh(row[['x1', 'y1', 'x2', 'y2']].tolist())
+            bbox = shrink_bbox(bbox, shrink_bbox_to)
 
             if frame_id not in result:
                 result[frame_id] = []

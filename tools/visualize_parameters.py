@@ -31,7 +31,7 @@ def run_parameter_visualization():
 
     device = torch.device('cuda:' + args.gpu)
 
-    cfg.set_args('0', 'body')
+    cfg.set_args(args.gpu, 'body')
 
     smpl_layer = copy.deepcopy(smpl.layer['neutral']).to(device)
 

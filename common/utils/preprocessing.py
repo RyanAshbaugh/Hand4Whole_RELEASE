@@ -504,6 +504,8 @@ def video_frame_generator(video, detection, batch_size=1):
                 continue
 
             if detections[str(ii)] != []:
+
+                # turn detected bounding boxes to boxes of model input shape
                 bboxes = [process_bbox(x1y1x2y2_to_xywh(box[:4]), width, height)
                           for box in detections[str(ii)] if box[-1] == 1.0]
                 for bbox in bboxes:

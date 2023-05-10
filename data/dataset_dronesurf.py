@@ -40,7 +40,7 @@ def select_entries(column, num_sequence_frames):
 
 class DataDroneSurfSMPL(tordata.Dataset):
     def __init__(self, dataset_root, triplet=False, num_sequence_frames=15,
-                 data_keys=['smpl_shape'], data_indices=[[3, 73]],
+                 data_keys=['smpl_shape'], data_indices=[[0, 10]],
                  transform=None):
 
         json_columns = ['cam_trans', 'smpl_pose', 'smpl_shape', 'bbox',
